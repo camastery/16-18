@@ -8,8 +8,6 @@ on:
         required: false
         default: "1"
 
-# Hanya 1 workflow yang boleh aktif pada satu waktu.
-# Run berikutnya akan menunggu sampai run sebelumnya selesai.
 concurrency:
   group: sm1m-workflow-lock
   cancel-in-progress: false
@@ -37,49 +35,82 @@ jobs:
       uses: actions/checkout@v4
 
     # ============================================================
-    # AUTO CHAIN
-    #
-    # Hanya target 51 yang membuat trigger berikutnya.
-    #
-    # #40
-    #   ↓ 1 menit
-    # membuat #41
-    #
-    # #41 akan menunggu karena #40 masih berjalan.
-    # Setelah #40 selesai, #41 mulai.
-    #
-    # Kemudian #41 melakukan hal yang sama untuk #42.
+    # CEK WORKFLOW
     # ============================================================
-    - name: Create Next Workflow After 1 Minute
+    - name: Check Mahiji Workflow
+      if: matrix.target == '51'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "=========================================="
+        echo "Workflow yang tersedia:"
+        echo "=========================================="
+
+        gh workflow list
+
+        echo ""
+        echo "=========================================="
+        echo "Workflow sekarang:"
+        echo "${{ github.workflow }}"
+        echo "File:"
+        echo "${{ github.workflow_ref }}"
+        echo "=========================================="
+
+    # ============================================================
+    # BUAT RUN BERIKUTNYA SETELAH 1 MENIT
+    #
+    # Contoh:
+    #
+    # #40 mulai
+    #     ↓
+    #   1 menit
+    #     ↓
+    # #41 dibuat
+    #     ↓
+    # #40 tetap berjalan
+    #     ↓
+    # #40 selesai
+    #     ↓
+    # #41 mulai
+    #
+    # #41 kemudian membuat #42 dengan cara yang sama.
+    # ============================================================
+    - name: Create Next Chain
       if: matrix.target == '51'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         CURRENT_CHAIN: ${{ inputs.chain_number }}
       run: |
+        set -e
+
         NEXT_CHAIN=$((CURRENT_CHAIN + 1))
 
         echo "=========================================="
-        echo "Workflow sekarang : #${CURRENT_CHAIN}"
-        echo "Workflow berikut  : #${NEXT_CHAIN}"
-        echo "Menunggu 1 menit..."
+        echo "CURRENT CHAIN : #${CURRENT_CHAIN}"
+        echo "NEXT CHAIN    : #${NEXT_CHAIN}"
         echo "=========================================="
 
+        echo ""
+        echo "Menunggu 60 detik..."
         sleep 60
 
+        echo ""
         echo "=========================================="
-        echo "Membuat workflow #${NEXT_CHAIN}"
+        echo "MEMBUAT WORKFLOW #${NEXT_CHAIN}"
         echo "=========================================="
 
-        gh workflow run mahiji.yml \
+        gh workflow run mahiji \
+          --repo "${GITHUB_REPOSITORY}" \
           --ref main \
           -f chain_number="${NEXT_CHAIN}"
 
+        echo ""
         echo "=========================================="
-        echo "Workflow #${NEXT_CHAIN} berhasil dibuat."
+        echo "BERHASIL MEMBUAT #${NEXT_CHAIN}"
         echo "=========================================="
 
     # ============================================================
-    # PYTHON
+    # SETUP PYTHON
     # ============================================================
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -87,7 +118,7 @@ jobs:
         python-version: '3.10'
 
     # ============================================================
-    # GOOGLE CHROME
+    # INSTALL GOOGLE CHROME
     # ============================================================
     - name: Install Google Chrome & Hapus Chromedriver Sistem
       run: |
@@ -96,7 +127,7 @@ jobs:
         sudo rm -f /usr/bin/chromedriver
 
     # ============================================================
-    # DEPENDENCIES
+    # INSTALL DEPENDENCIES
     # ============================================================
     - name: Install Dependencies
       run: |
@@ -123,7 +154,7 @@ jobs:
         python download_drive.py
 
     # ============================================================
-    # JALANKAN SEMUA BOT
+    # JALANKAN SEMUA SUBFOLDER BOT
     # ============================================================
     - name: Run All Subfolder Bots In Parallel
       run: |
