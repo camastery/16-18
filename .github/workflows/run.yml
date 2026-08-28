@@ -8,9 +8,8 @@ on:
         required: false
         default: "1"
 
-# Hanya 1 workflow mahiji yang boleh berjalan pada satu waktu.
-# Kalau #2 sudah ditrigger tetapi #1 masih berjalan,
-# #2 akan menunggu sampai lock tersedia.
+# Hanya 1 workflow yang boleh aktif pada satu waktu.
+# Run berikutnya akan menunggu sampai run sebelumnya selesai.
 concurrency:
   group: sm1m-workflow-lock
   cancel-in-progress: false
@@ -30,129 +29,147 @@ jobs:
         target: ['51', '52', '53', '54', '55', '56', '57', '58', '59', '60']
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
 
-      # ============================================================
-      # AUTO CHAIN
-      # Setiap workflow akan membuat workflow berikutnya 1 menit
-      # kemudian.
-      #
-      # Hanya target 51 yang menjalankan trigger agar tidak
-      # trigger 10x karena matrix.
-      # ============================================================
-      - name: Schedule Next Workflow
-        if: matrix.target == '51'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CURRENT_CHAIN: ${{ inputs.chain_number }}
-        run: |
-          NEXT_CHAIN=$((CURRENT_CHAIN + 1))
+    # ============================================================
+    # CHECKOUT
+    # ============================================================
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-          echo "=========================================="
-          echo "Current chain : #${CURRENT_CHAIN}"
-          echo "Next chain    : #${NEXT_CHAIN}"
-          echo "Next run      : 1 menit dari sekarang"
-          echo "=========================================="
+    # ============================================================
+    # AUTO CHAIN
+    #
+    # Hanya target 51 yang membuat trigger berikutnya.
+    #
+    # #40
+    #   ↓ 1 menit
+    # membuat #41
+    #
+    # #41 akan menunggu karena #40 masih berjalan.
+    # Setelah #40 selesai, #41 mulai.
+    #
+    # Kemudian #41 melakukan hal yang sama untuk #42.
+    # ============================================================
+    - name: Create Next Workflow After 1 Minute
+      if: matrix.target == '51'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        CURRENT_CHAIN: ${{ inputs.chain_number }}
+      run: |
+        NEXT_CHAIN=$((CURRENT_CHAIN + 1))
 
-          (
-            sleep 60
+        echo "=========================================="
+        echo "Workflow sekarang : #${CURRENT_CHAIN}"
+        echo "Workflow berikut  : #${NEXT_CHAIN}"
+        echo "Menunggu 1 menit..."
+        echo "=========================================="
 
-            echo "=========================================="
-            echo "Triggering mahiji #${NEXT_CHAIN}"
-            echo "=========================================="
+        sleep 60
 
-            gh workflow run mahiji.yml \
-              --ref main \
-              -f chain_number="${NEXT_CHAIN}"
+        echo "=========================================="
+        echo "Membuat workflow #${NEXT_CHAIN}"
+        echo "=========================================="
 
-            echo "Next workflow #${NEXT_CHAIN} berhasil ditrigger."
-          ) &
+        gh workflow run mahiji.yml \
+          --ref main \
+          -f chain_number="${NEXT_CHAIN}"
 
-      # ============================================================
-      # SETUP PYTHON
-      # ============================================================
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+        echo "=========================================="
+        echo "Workflow #${NEXT_CHAIN} berhasil dibuat."
+        echo "=========================================="
 
-      # ============================================================
-      # INSTALL CHROME
-      # ============================================================
-      - name: Install Google Chrome & Hapus Chromedriver Sistem
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wget google-chrome-stable
-          sudo rm -f /usr/bin/chromedriver
+    # ============================================================
+    # PYTHON
+    # ============================================================
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
 
-      # ============================================================
-      # INSTALL DEPENDENCIES
-      # ============================================================
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install \
-            google-api-python-client \
-            google-auth-httplib2 \
-            google-auth-oauthlib \
-            selenium \
-            requests \
-            selenium-stealth \
-            undetected-chromedriver
+    # ============================================================
+    # GOOGLE CHROME
+    # ============================================================
+    - name: Install Google Chrome & Hapus Chromedriver Sistem
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wget google-chrome-stable
+        sudo rm -f /usr/bin/chromedriver
 
-      # ============================================================
-      # DOWNLOAD FILES
-      # ============================================================
-      - name: Download & Extract Files from Google Drive
-        env:
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FILE_ID }}
-          TARGET_ACCOUNT: ${{ matrix.target }}
-        run: |
-          python download_drive.py
+    # ============================================================
+    # DEPENDENCIES
+    # ============================================================
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
 
-      # ============================================================
-      # RUN ALL SUBFOLDER BOTS
-      # ============================================================
-      - name: Run All Subfolder Bots In Parallel
-        run: |
-          python3 -c "
-          import os
-          import subprocess
+        pip install \
+          google-api-python-client \
+          google-auth-httplib2 \
+          google-auth-oauthlib \
+          selenium \
+          requests \
+          selenium-stealth \
+          undetected-chromedriver
 
-          target = '${{ matrix.target }}'
-          processes = []
+    # ============================================================
+    # DOWNLOAD FILE DARI GOOGLE DRIVE
+    # ============================================================
+    - name: Download & Extract Files from Google Drive
+      env:
+        GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FILE_ID }}
+        TARGET_ACCOUNT: ${{ matrix.target }}
+      run: |
+        python download_drive.py
 
-          def run_bot_loop(bot_dir):
-              cmd = '''
-              until python3 sm.py; do
-                  echo \"[!] Bot di {bot_dir} terhenti. Restart dalam 5s...\"
-                  sleep 5
-              done
-              '''
-              return subprocess.Popen(
-                  cmd,
-                  shell=True,
-                  cwd=bot_dir,
-                  executable='/bin/bash'
-              )
+    # ============================================================
+    # JALANKAN SEMUA BOT
+    # ============================================================
+    - name: Run All Subfolder Bots In Parallel
+      run: |
+        python3 -c "
+        import os
+        import subprocess
 
-          if os.path.exists(target):
-              for root, dirs, files in os.walk(target):
-                  if 'sm.py' in files:
-                      print(
-                          f'==> Menjalankan Bot dengan Auto-Restart di: {root}'
-                      )
-                      p = run_bot_loop(root)
-                      processes.append(p)
+        target = '${{ matrix.target }}'
+        processes = []
 
-              for p in processes:
-                  p.wait()
+        def run_bot_loop(bot_dir):
+            cmd = '''
+            until python3 sm.py; do
+                echo \"[!] Bot di {bot_dir} terhenti. Restart dalam 5s...\"
+                sleep 5
+            done
+            '''
 
-          else:
-              print(
-                  f'[!] ERROR: Folder {target} tidak ditemukan!'
-              )
-              exit(1)
-          "
+            return subprocess.Popen(
+                cmd,
+                shell=True,
+                cwd=bot_dir,
+                executable='/bin/bash'
+            )
+
+        if os.path.exists(target):
+
+            for root, dirs, files in os.walk(target):
+
+                if 'sm.py' in files:
+
+                    print(
+                        f'==> Menjalankan Bot dengan Auto-Restart di: {root}'
+                    )
+
+                    p = run_bot_loop(root)
+                    processes.append(p)
+
+            for p in processes:
+                p.wait()
+
+        else:
+
+            print(
+                f'[!] ERROR: Folder {target} tidak ditemukan!'
+            )
+
+            exit(1)
+        "
